@@ -73,6 +73,9 @@ class RakunKeyphraseDetector:
             stopwords_generic = set(json.loads(stopwords.decode()))
             self.hyperparameters["stopwords"] = stopwords_generic
 
+        if "max_ngrams" not in self.hyperparameters:
+            self.hyperparameters["max_ngrams"] = 2
+
     def visualize_network(
         self,
         labels: bool = False,
@@ -341,6 +344,62 @@ class RakunKeyphraseDetector:
 
         self.tokens = tmp_tokens
 
+    def merge_tokens_ngrams(self) -> None:
+        """Extend token merge method to include n-grams up to a specified length."""
+        # Hyperparameter ngrams
+        max_ngram_length=self.hyperparameters["ngrams"]
+
+        # Dictionary to store n-gram counts for different n values
+        ngram_counts = {}
+
+        # Generate and count n-grams for each n from 2 to max_ngram_length
+        for n in range(2, max_ngram_length + 1):
+            ngrams = [tuple(self.tokens[i:i + n]) for i in range(len(self.tokens) - n + 1)]
+            ngram_counts[n] = dict(Counter(ngrams))
+
+        tmp_tokens = []
+        merged = set()
+        for n in range( max_ngram_length , max_ngram_length-1, -1):
+            current_ngrams = ngram_counts[n]
+            for enx in range(len(self.tokens) - (n - 1)):
+                curr_tokens = tuple(self.tokens[enx:enx + n])
+                curr_counts = [self.term_counts[token] for token in curr_tokens]
+                ngc = current_ngrams[curr_tokens]
+                ngs=0
+                count_total=0
+                for count in curr_counts:
+                    ngs+=np.abs(count - ngc)
+                    count_total+=count
+                ngs = ngs / count_total
+                if all(token not in self.hyperparameters["stopwords"] for token in curr_tokens):
+                    if ngs < self.hyperparameters["merge_threshold"]:
+                        if all(len(token) > self.hyperparameters["token_prune_len"] for token in curr_tokens):
+                           to_add = " ".join(curr_tokens)
+                           tmp_tokens.append(to_add)
+                           for token in curr_tokens:
+                                merged.add(token)
+
+                           self.term_counts[to_add] = ngc
+                           for token in curr_tokens:
+                               self.term_counts[token] *= self.hyperparameters["merge_threshold"] 
+                    else:
+                        continue
+                
+                else:
+                    for token in curr_tokens:
+                        tmp_tokens.append(token)
+
+        if self.hyperparameters["deduplication"]:
+            to_drop = set()
+
+            for token in tmp_tokens:
+                if token in merged:
+                    to_drop.add(token)
+
+            tmp_tokens = [x for x in tmp_tokens if x not in to_drop]
+
+        self.tokens = tmp_tokens
+
     def tokenize(self) -> None:
         """ Core tokenization method """
 
@@ -409,7 +468,7 @@ class RakunKeyphraseDetector:
         self.document = " ".join(document)
         self.tokenize()
         self.compute_tf_scores()
-        self.merge_tokens()
+        self.merge_tokens_ngrams()
         self.get_document_graph()
         self.combine_keywords()
         self.match_sweep()
